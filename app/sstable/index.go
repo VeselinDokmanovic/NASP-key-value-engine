@@ -33,8 +33,6 @@ func ReadIndexEntry(file *os.File) (*IndexEntry, error) {
 	}
 
 	rawKey := buf[:INDEX_KEY_SIZE]
-
-	// skidamo padding nule
 	key := bytes.TrimRight(rawKey, "\x00")
 
 	offset := binary.LittleEndian.Uint64(

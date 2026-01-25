@@ -10,3 +10,6 @@ const (
 	SUMMARY_HEADER_SIZE = SUMMARY_KEY_SIZE * 2
 	SUMMARY_STEP        = 4
 )
+const (
+	MERKLE_HASH_SIZE = 32
+)

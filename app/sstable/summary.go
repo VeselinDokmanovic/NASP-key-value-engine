@@ -58,3 +58,40 @@ func ReadSummaryEntry(file *os.File) (*SummaryEntry, error) {
 		IndexOffset: offset,
 	}, nil
 }
+
+// ==================== COMPRESSED FORMAT V2 ====================
+// SerializeSummaryEntryV2 enkodira Summary entry sa delta + varint:
+// [Key:delta] [IndexOffset:varint]
+func SerializeSummaryEntryV2(key []byte, indexOffset uint64, previousKey []byte) []byte {
+	result := &bytes.Buffer{}
+
+	// Enkodira ključ sa delta od prethodnog
+	deltaKey := EncodeDeltaKey(key, previousKey)
+	result.Write(deltaKey)
+
+	// Enkodira IndexOffset kao varint
+	offsetVarint := EncodeVarint(indexOffset)
+	result.Write(offsetVarint)
+
+	return result.Bytes()
+}
+
+// DeserializeSummaryEntryV2 dekodira komprimovani Summary entry
+func DeserializeSummaryEntryV2(data []byte, offset int, previousKey []byte) (*SummaryEntry, int, error) {
+	// Dekodira ključ sa delta od prethodnog
+	key, pos, err := DecodeDeltaKey(data, offset, previousKey)
+	if err != nil {
+		return nil, pos, err
+	}
+
+	// Dekodira IndexOffset kao varint
+	offsetVal, pos, err := DecodeVarint(data, pos)
+	if err != nil {
+		return nil, pos, err
+	}
+
+	return &SummaryEntry{
+		Key:         key,
+		IndexOffset: offsetVal,
+	}, pos, nil
+}

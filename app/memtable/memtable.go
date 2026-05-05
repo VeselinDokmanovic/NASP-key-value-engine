@@ -5,17 +5,24 @@ import (
 	"time"
 )
 
+const (
+	EntryTypeData byte = iota
+	EntryTypeDelete
+)
+
 type Entry struct {
 	Key       []byte
 	Value     []byte
 	Timestamp int64
-	Tombstone bool
+	Tombstone byte
+	Type      byte
 }
 
 type MemtableConfig struct {
 	Type        string
 	MaxEntries  int
 	MaxMemoryKB int64
+	BTreeOrder  int // optional: for B-tree implementations; default >=3
 }
 
 type Memtable interface {
@@ -38,10 +45,10 @@ func NewMemtable(config MemtableConfig) (Memtable, bool) {
 	switch config.Type {
 	case "hashmap":
 		return NewHashMapMemtable(config), true
-	// case "skiplist":
-	// 	return NewSkipListMemtable(config), true
-	// case "btree":
-	// 	return NewBTreeMemtable(config), true
+	case "skiplist":
+		return NewSkipListMemtable(config), true
+	case "btree":
+		return NewBTreeMemtable(config), true
 	default:
 		fmt.Println("Pogresan tip strukture!")
 		return nil, false
@@ -49,11 +56,12 @@ func NewMemtable(config MemtableConfig) (Memtable, bool) {
 
 }
 
-func NewMemtableEntry(key []byte, value []byte, tombstone bool) *Entry {
+func NewMemtableEntry(key []byte, value []byte, tombstone byte, entryType byte) *Entry {
 	return &Entry{
 		Key:       key,
 		Value:     value,
 		Timestamp: time.Now().UnixNano(),
 		Tombstone: tombstone,
+		Type:      entryType,
 	}
 }

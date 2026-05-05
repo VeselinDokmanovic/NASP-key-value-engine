@@ -42,7 +42,7 @@ func (h *HashMapMemtable) Put(key []byte, entry *Entry) bool {
 
 func (h *HashMapMemtable) Get(key []byte) (*Entry, bool) {
 	entry := h.data[string(key)]
-	if entry == nil || entry.Tombstone {
+	if entry == nil || entry.Tombstone != 0 {
 		return entry, false
 	} else {
 		return entry, true
@@ -51,10 +51,11 @@ func (h *HashMapMemtable) Get(key []byte) (*Entry, bool) {
 
 func (h *HashMapMemtable) Delete(key []byte) bool {
 	entry := h.data[string(key)]
-	if entry == nil || entry.Tombstone {
+	if entry == nil || entry.Tombstone != 0 {
 		return false
 	} else {
-		entry.Tombstone = true
+		entry.Tombstone = 1
+		entry.Type = EntryTypeDelete
 		return true
 	}
 }

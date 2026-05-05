@@ -7,100 +7,55 @@ import (
 
 func main() {
 
-	// =========== AI Test primer ne zameri ============
+	impls := []string{"hashmap", "skiplist", "btree"}
+	for _, impl := range impls {
+		fmt.Printf("\n=== Testing memtable implementation: %s ===\n", impl)
 
-	fmt.Println("=== Memtable Test ===")
-
-	// Kreiraj memtable konfiguraciju
-	config := memtable.MemtableConfig{
-		Type:        "hashmap",
-		MaxEntries:  5,
-		MaxMemoryKB: 1024,
-	}
-
-	// Kreiraj memtable
-	mt, ok := memtable.NewMemtable(config)
-	if !ok {
-		fmt.Println("Greška: Nije moguće kreirati memtable")
-		return
-	}
-
-	fmt.Println("Memtable kreiran")
-
-	// Test 1: PUT operacija
-	fmt.Println("\n--- Test PUT ---")
-	entry1 := memtable.NewMemtableEntry([]byte("korisnik1"), []byte("Petar Petrović"), false)
-	entry2 := memtable.NewMemtableEntry([]byte("korisnik2"), []byte("Ana Anić"), false)
-	entry3 := memtable.NewMemtableEntry([]byte("email"), []byte("test@example.com"), false)
-
-	mt.Put([]byte("korisnik1"), entry1)
-	mt.Put([]byte("korisnik2"), entry2)
-	mt.Put([]byte("email"), entry3)
-
-	fmt.Printf("Broj elemenata: %d\n", mt.Size())
-	fmt.Printf("Memorijska upotreba: %d bajtova\n", mt.MemoryUsage())
-
-	// Test 2: GET operacija
-	fmt.Println("\n--- Test GET ---")
-	if value, found := mt.Get([]byte("korisnik1")); found {
-		fmt.Printf(" Pronađeno: korisnik1 = %s\n", string(value.Value))
-	} else {
-		fmt.Println("Ključ 'korisnik1' nije pronađen")
-	}
-
-	if value, found := mt.Get([]byte("email")); found {
-		fmt.Printf("Pronađeno: email = %s\n", string(value.Value))
-	} else {
-		fmt.Println(" Ključ 'email' nije pronađen")
-	}
-
-	// Test nepostojećeg ključa
-	if _, found := mt.Get([]byte("nepostojeci")); !found {
-		fmt.Println(" Ključ 'nepostojeci' ispravno nije pronađen")
-	}
-
-	// Test 3: DELETE operacija
-	fmt.Println("\n--- Test DELETE ---")
-	mt.Delete([]byte("korisnik2"))
-	fmt.Println("Obrisan ključ: korisnik2")
-
-	if _, found := mt.Get([]byte("korisnik2")); !found {
-		fmt.Println("✓ Ključ 'korisnik2' više nije dostupan (tombstone)")
-	}
-
-	// Test 4: GetAllSorted
-	fmt.Println("\n--- Test GetAllSorted ---")
-	sorted := mt.GetAllSorted()
-	fmt.Printf("Sortirani unosi (%d):\n", len(sorted))
-	for i, entry := range sorted {
-		status := "aktivan"
-		if entry.Tombstone {
-			status = "obrisan"
+		cfg := memtable.MemtableConfig{
+			Type:        impl,
+			MaxEntries:  5,
+			MaxMemoryKB: 1024,
+			BTreeOrder:  3,
 		}
-		fmt.Printf("  %d. %s = %s [%s]\n", i+1, string(entry.Key), string(entry.Value), status)
+
+		pool, ok := memtable.NewMemtablePool(2, cfg)
+		if !ok {
+			fmt.Printf("Failed to create pool for %s\n", impl)
+			continue
+		}
+
+		// PUT a few entries via pool
+		pool.Put([]byte("a"), []byte("val_a"))
+		pool.Put([]byte("b"), []byte("val_b"))
+		pool.Put([]byte("c"), []byte("val_c"))
+
+		fmt.Printf("Size after puts: %d, Memory: %d B\n", pool.Size(), pool.MemoryUsage())
+
+		// GET existing and non-existing
+		if e, found := pool.Get([]byte("b")); found {
+			fmt.Printf("GET b -> %s\n", string(e.Value))
+		}
+		if _, found := pool.Get([]byte("z")); !found {
+			fmt.Println("GET z -> not found (ok)")
+		}
+
+		// DELETE via pool
+		pool.Delete([]byte("b"))
+		if _, found := pool.Get([]byte("b")); !found {
+			fmt.Println("b is tombstoned (ok)")
+		}
+
+		// Fill to force rotation and check ShouldFlush
+		pool.Put([]byte("d"), []byte("val_d"))
+		pool.Put([]byte("e"), []byte("val_e"))
+		fmt.Printf("Pool Size: %d, ShouldFlush=%v\n", pool.Size(), pool.ShouldFlush())
+
+		// Get all entries for flush (sorted)
+		all := pool.GetAllForFlush()
+		fmt.Printf("All entries for flush: %d\n", len(all))
+
+		// Clear pool
+		pool.Clear()
+		fmt.Printf("After Clear: Size=%d, Memory=%d\n", pool.Size(), pool.MemoryUsage())
 	}
-
-	// Test 5: Popunjavanje do limita
-	fmt.Println("\n--- Test IsFull ---")
-	entry4 := memtable.NewMemtableEntry([]byte("key4"), []byte("value4"), false)
-	entry5 := memtable.NewMemtableEntry([]byte("key5"), []byte("value5"), false)
-
-	mt.Put([]byte("key4"), entry4)
-	mt.Put([]byte("key5"), entry5)
-
-	fmt.Printf("Broj elemenata: %d/%d\n", mt.Size(), config.MaxEntries)
-	fmt.Printf("Memtable je pun: %v\n", mt.IsFull())
-
-	// Pokušaj dodavanja kada je pun
-	entry6 := memtable.NewMemtableEntry([]byte("key6"), []byte("value6"), false)
-	if !mt.Put([]byte("key6"), entry6) {
-		fmt.Println("✓ Put operacija odbačena - memtable je pun")
-	}
-
-	// Test 6: Clear
-	fmt.Println("\n--- Test Clear ---")
-	mt.Clear()
-	fmt.Printf("Nakon Clear(): Broj elemenata = %d, Memorija = %d B\n", mt.Size(), mt.MemoryUsage())
-
-	fmt.Println("\n=== Testiranje završeno ===")
 }

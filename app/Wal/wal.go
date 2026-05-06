@@ -1,4 +1,4 @@
-package main
+package Wal
 
 import (
 	"encoding/binary"
@@ -122,14 +122,14 @@ func (w *WAL) setBlockUsedBytes(blockData []byte, used int) {
 }
 
 func WALInit(dir string) (*WAL, error) {
-	return WALInitConfig(dir, int64(BLOCK_SIZE), int64(BLOCK_FACTOR))
+	return WALInitConfig(dir, int64(BLOCK_SIZE), int64(BLOCK_FACTOR), int64(CACHE_SIZE))
 }
 
-func WALInitConfig(dir string, blockSize, blockFactor int64) (*WAL, error) {
+func WALInitConfig(dir string, blockSize, blockFactor, cacheSize int64) (*WAL, error) {
 	bm, err := block.NewBlockManager(block.Config{
 		PageSize:  int(blockSize),
 		BlockSize: int(blockSize),
-		CacheSize: CACHE_SIZE,
+		CacheSize: int(cacheSize),
 	})
 	if err != nil {
 		return nil, err

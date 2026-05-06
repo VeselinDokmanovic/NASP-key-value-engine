@@ -14,26 +14,38 @@ type skipNode struct {
 }
 
 type SkipListMemtable struct {
-	header     *skipNode
-	level      int
-	size       int
-	memoryUsed int64
-	cfg        MemtableConfig
+	header      *skipNode
+	level       int
+	size        int
+	memoryUsed  int64
+	cfg         MemtableConfig
+	maxLevel    int
+	probability float64
 }
 
 func NewSkipListMemtable(cfg MemtableConfig) *SkipListMemtable {
+	maxLevel := cfg.MaxLevel
+	if maxLevel <= 0 {
+		maxLevel = 16
+	}
+	probability := cfg.Probability
+	if probability <= 0 || probability >= 1 {
+		probability = 0.5
+	}
 	return &SkipListMemtable{
 		header: &skipNode{
 			forward: make([]*skipNode, maxLevel),
 		},
-		level: 0,
-		cfg:   cfg,
+		level:       0,
+		cfg:         cfg,
+		maxLevel:    maxLevel,
+		probability: probability,
 	}
 }
 
 func (s *SkipListMemtable) randomLevel() int {
 	level := 0
-	for rand.Float64() < probability && level < maxLevel-1 {
+	for rand.Float64() < s.probability && level < s.maxLevel-1 {
 		level++
 	}
 	return level
@@ -44,7 +56,7 @@ func (s *SkipListMemtable) Put(key []byte, entry *Entry) bool {
 		return false
 	}
 
-	update := make([]*skipNode, maxLevel)
+	update := make([]*skipNode, s.maxLevel)
 	current := s.header
 
 	for i := s.level; i >= 0; i-- {

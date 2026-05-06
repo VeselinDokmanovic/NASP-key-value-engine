@@ -1,0 +1,85 @@
+{
+  "wal": {
+    "block": {
+      "crc_size": 4,
+      "timestamp_size": 8,
+      "tombstone_size": 1,
+      "key_size_size": 8,
+      "value_size_size": 8,
+      "type_size": 1,
+      "block_hdr_size": 6,
+      "block_factor": 5,
+      "block_size": 2048,
+      "cache_size": 16
+    },
+    "offsets": {
+      "crc_start": 0,
+      "timestamp_start": 4,
+      "tombstone_start": 12,
+      "key_size_start": 13,
+      "value_size_start": 21,
+      "type_start": 29,
+      "key_start": 30
+    },
+    "record_types": {
+      "full": 0,
+      "start": 1,
+      "mid": 2,
+      "end": 3
+    },
+    "magic": "WALB"
+  },
+  "sstable": {
+    "index": {
+      "key_size": 32,
+      "entry_size": 40
+    },
+    "summary": {
+      "key_size": 32,
+      "entry_size": 40,
+      "header_size": 64,
+      "step": 4
+    },
+    "merkle": {
+      "hash_size": 32
+    },
+    "bloom": {
+      "expected_elements": 1000,
+      "false_positive_rate": 0.01
+    }
+  },
+  "memtable": {
+    "entry_types": {
+      "data": 0,
+      "delete": 1
+    },
+    "hashmap": {
+      "max_entries": 1000,
+      "max_memory_kb": 1024,
+      "btree_order": 3
+    },
+    "pool": {
+      "type": "hashmap",
+      "size": 3
+    },
+    "skiplist": {
+      "max_level": 16,
+      "probability": 0.5
+    }
+  },
+  "ratelimit": {
+    "reserved_key_prefix": "__sys__",
+    "token_bucket_key": "__sys__token_bucket",
+    "default_config": {
+      "max_tokens": 100,
+      "refill_interval": "1s"
+    }
+  },
+  "block_manager": {
+    "default_config": {
+      "page_size": 4096,
+      "block_size": 4096,
+      "cache_size": 2
+    }
+  }
+}

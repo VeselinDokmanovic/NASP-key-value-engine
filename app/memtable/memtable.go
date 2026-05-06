@@ -23,6 +23,8 @@ type MemtableConfig struct {
 	MaxEntries  int
 	MaxMemoryKB int64
 	BTreeOrder  int // optional: for B-tree implementations; default >=3
+	MaxLevel    int
+	Probability float64
 }
 
 type Memtable interface {

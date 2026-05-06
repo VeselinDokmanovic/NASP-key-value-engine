@@ -2,8 +2,9 @@ package sstable
 
 import (
 	"encoding/binary"
+	"fmt"
 	"hash/crc32"
-	"os"
+	"io"
 )
 
 type Entry struct {
@@ -39,13 +40,17 @@ func (e *Entry) Serialize() []byte {
 	return append(crcBytes, payload...)
 }
 
-func DeserializeEntry(file *os.File) (*Entry, error) {
+func DeserializeEntry(r io.Reader) (*Entry, error) {
+	// Format: CRC(4) | Timestamp(8) | Tombstone(1) | KeySize(8) | ValueSize(8) | Type(1) | Key | Value
+	// CRC se racuna nad svim bajtovima koji dolaze NAKON CRC polja (payload).
 	header := make([]byte, 4+8+1+8+8+1)
 
-	_, err := file.Read(header)
+	_, err := io.ReadFull(r, header)
 	if err != nil {
 		return nil, err
 	}
+
+	storedCRC := binary.LittleEndian.Uint32(header[0:4])
 
 	e := &Entry{}
 
@@ -58,15 +63,27 @@ func DeserializeEntry(file *os.File) (*Entry, error) {
 	e.Type = header[29]
 
 	e.Key = make([]byte, keySize)
-	_, err = file.Read(e.Key)
+	_, err = io.ReadFull(r, e.Key)
 	if err != nil {
 		return nil, err
 	}
 
 	e.Value = make([]byte, valueSize)
-	_, err = file.Read(e.Value)
+	_, err = io.ReadFull(r, e.Value)
 	if err != nil {
 		return nil, err
+	}
+
+	// Validacija CRC-a: payload = sve nakon CRC polja
+	payload := make([]byte, 0, len(header)-4+int(keySize)+int(valueSize))
+	payload = append(payload, header[4:]...)
+	payload = append(payload, e.Key...)
+	payload = append(payload, e.Value...)
+
+	computedCRC := crc32.ChecksumIEEE(payload)
+	if computedCRC != storedCRC {
+		return nil, fmt.Errorf("CRC nevalidan za kljuc '%s': ocekivan %08x, dobijen %08x",
+			string(e.Key), storedCRC, computedCRC)
 	}
 
 	return e, nil

@@ -73,6 +73,7 @@ type Engine struct {
 	RateLimitedStore *ratelimit.RateLimitedStore
 	SSTable          *sstable.SSTable
 	BloomFilter      *sstable.BloomFilter
+	sstableLoaded    bool
 }
 
 func NewEngine() (*Engine, error) {
@@ -240,6 +241,74 @@ func loadEngineConfig(path string) (*engineConfig, error) {
 	}
 
 	return &config, nil
+}
+
+func (e *Engine) ensureSSTableLoaded() error {
+	if e == nil || e.SSTable == nil || e.sstableLoaded {
+		return nil
+	}
+
+	if err := e.SSTable.Read(); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	e.sstableLoaded = true
+	return nil
+}
+
+func (e *Engine) Get(key []byte) ([]byte, bool, error) {
+	if e == nil {
+		return nil, false, errors.New("engine is nil")
+	}
+
+	if e.MemtablePool != nil {
+		if entry, found := e.MemtablePool.Get(key); found {
+			if e.LRUCache != nil && entry != nil && entry.Value != nil {
+				e.LRUCache.Put(string(key), append([]byte(nil), entry.Value...))
+			}
+			return entry.Value, true, nil
+		}
+	}
+
+	if e.LRUCache != nil {
+		if value, found := e.LRUCache.Get(string(key)); found {
+			return value, true, nil
+		}
+	}
+
+	if e.SSTable == nil {
+		return nil, false, nil
+	}
+
+	if err := e.ensureSSTableLoaded(); err != nil {
+		return nil, false, err
+	}
+	if !e.sstableLoaded {
+		return nil, false, nil
+	}
+
+	value, found, err := e.SSTable.Search(key)
+	if err != nil {
+		return nil, false, err
+	}
+	if !found {
+		return nil, false, nil
+	}
+	if value == nil {
+		if e.LRUCache != nil {
+			e.LRUCache.Delete(string(key))
+		}
+		return nil, false, nil
+	}
+
+	if e.LRUCache != nil {
+		e.LRUCache.Put(string(key), append([]byte(nil), value...))
+	}
+
+	return value, true, nil
 }
 
 func (e *Engine) Close() {

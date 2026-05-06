@@ -14,15 +14,40 @@ func main() {
 		fmt.Println("Error reading latest records:", err)
 	}
 	// tests
-	wal.append("key1", "value1", false)
+	success, err := wal.append("key1", "value1", false)
+	if err != nil {
+		fmt.Printf("append key1 failed: %v\n", err)
+	} else if success {
+		fmt.Println("key1 appended successfully")
+	}
 
-	wal.append("key2", strings.Repeat("x", 1000), false)
+	success, err = wal.append("key2", strings.Repeat("x", 1000), false)
+	if err != nil {
+		fmt.Printf("append key2 failed: %v\n", err)
+	} else if success {
+		fmt.Println("key2 appended successfully")
+	}
 
-	wal.append("key3", strings.Repeat("y", 8000), false)
+	success, err = wal.append("key3", strings.Repeat("y", 8000), false)
+	if err != nil {
+		fmt.Printf("append key3 failed: %v\n", err)
+	} else if success {
+		fmt.Println("key3 appended successfully")
+	}
 
-	wal.append("key4", strings.Repeat("z", 25000), false)
+	success, err = wal.append("key4", strings.Repeat("z", 25000), false)
+	if err != nil {
+		fmt.Printf("append key4 failed: %v\n", err)
+	} else if success {
+		fmt.Println("key4 appended successfully")
+	}
 
-	wal.append("k", strings.Repeat("a", 2000), false)
+	success, err = wal.append("k", strings.Repeat("a", 2000), false)
+	if err != nil {
+		fmt.Printf("append k failed: %v\n", err)
+	} else if success {
+		fmt.Println("k appended successfully")
+	}
 	if err := wal.Flush(); err != nil {
 		fmt.Println("Flush failed:", err)
 	}

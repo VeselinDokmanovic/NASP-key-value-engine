@@ -433,17 +433,21 @@ func (w *WAL) lastFile() (string, bool) {
 
 // writes a record to the latest WAL segment
 // if no file exists or segment is full, creates a new one
-func (w *WAL) append(key, value string, tombstone bool) error {
+func (w *WAL) append(key, value string, tombstone bool) (bool, error) {
 	if len(w.files) == 0 {
 		// Create initial segment if none exist
 		_, err := w.newSegment()
 		if err != nil {
-			return err
+			return false, err
 		}
 	}
 	lastFile, _ := w.lastFile()
 	w.currentFile = lastFile
-	return w.writeRecordFragments(lastFile, key, value, tombstone)
+	err := w.writeRecordFragments(lastFile, key, value, tombstone)
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (w *WAL) ensureCurrentBlock(filePath string) error {

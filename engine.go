@@ -137,7 +137,7 @@ func NewEngine() (*Engine, error) {
 		walDir,
 		config.WAL.Block.BlockSize,
 		config.WAL.Block.BlockFactor,
-		config.WAL.Block.CacheSize,
+		blockManager,
 	)
 	if err != nil {
 		return nil, err
@@ -489,4 +489,17 @@ func (e *Engine) Close() {
 	if e.TokenBucket != nil {
 		e.TokenBucket.Stop()
 	}
+}
+
+func (e *Engine) RawGet(key string) ([]byte, bool) {
+	val, err := e.Get([]byte(key))
+	return val, err == nil
+}
+
+func (e *Engine) RawPut(key string, value []byte) error {
+	return e.Put([]byte(key), value)
+}
+
+func (e *Engine) RawDelete(key string) error {
+	return e.Delete([]byte(key))
 }

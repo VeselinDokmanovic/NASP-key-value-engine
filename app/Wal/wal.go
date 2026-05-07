@@ -121,20 +121,11 @@ func (w *WAL) setBlockUsedBytes(blockData []byte, used int) {
 	binary.LittleEndian.PutUint16(blockData[4:6], uint16(used))
 }
 
-func WALInit(dir string) (*WAL, error) {
-	return WALInitConfig(dir, int64(BLOCK_SIZE), int64(BLOCK_FACTOR), int64(CACHE_SIZE))
+func WALInit(dir string, bm *block.BlockManager) (*WAL, error) {
+	return WALInitConfig(dir, int64(BLOCK_SIZE), int64(BLOCK_FACTOR), bm)
 }
 
-func WALInitConfig(dir string, blockSize, blockFactor, cacheSize int64) (*WAL, error) {
-	bm, err := block.NewBlockManager(block.Config{
-		PageSize:  int(blockSize),
-		BlockSize: int(blockSize),
-		CacheSize: int(cacheSize),
-	})
-	if err != nil {
-		return nil, err
-	}
-
+func WALInitConfig(dir string, blockSize, blockFactor int64, bm *block.BlockManager) (*WAL, error) {
 	w := &WAL{dir: dir, blockSize: blockSize, blockFactor: blockFactor, bm: bm}
 	if err := w.loadLogFiles(); err != nil {
 		return nil, err

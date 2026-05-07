@@ -1,4 +1,4 @@
-package Wal
+package wal
 
 import (
 	"encoding/binary"
@@ -431,9 +431,9 @@ func (w *WAL) lastFile() (string, bool) {
 	return w.files[len(w.files)-1], true
 }
 
-// writes a record to the latest WAL segment
+// Append writes a record to the latest WAL segment
 // if no file exists or segment is full, creates a new one
-func (w *WAL) append(key, value string, tombstone bool) (bool, error) {
+func (w *WAL) Append(key, value string, tombstone bool) (bool, error) {
 	if len(w.files) == 0 {
 		// Create initial segment if none exist
 		_, err := w.newSegment()

@@ -43,7 +43,7 @@ type SSTableConfig struct {
 	Dir              string
 	BlockManager     *block.BlockManager
 	CompressionLevel int
-	SummaryStep      int // 1.3[DZ1]: svaki N-ti index entry se upisuje u Summary (default 4)
+	SummaryStep      int
 }
 
 func NewSSTable(cfg SSTableConfig) *SSTable {
@@ -58,7 +58,7 @@ func NewSSTable(cfg SSTableConfig) *SSTable {
 
 	summaryStep := cfg.SummaryStep
 	if summaryStep <= 0 {
-		summaryStep = SUMMARY_STEP // default iz constants.go
+		summaryStep = SUMMARY_STEP
 	}
 
 	return &SSTable{
@@ -248,7 +248,6 @@ func (st *SSTable) Read() error {
 	}
 	st.bloomFilter = bf
 
-	// Ucitavamo samo header Summary-ja (MinKey i MaxKey) - ostalo citamo blok po blok
 	summaryHeader, err := st.readSummaryHeader()
 	if err != nil {
 		return fmt.Errorf("greska pri citanju Summary header-a: %w", err)
@@ -283,28 +282,27 @@ func (st *SSTable) Read() error {
 	return nil
 }
 
-// Search trazi kljuc u SSTable-u.
-// Vraca (vrednost, pronadjen, greska).
-// pronadjen=true znaci da je kljuc u ovoj tabeli (i ako je obrisan tombstonom, vrednost je nil).
-// pronadjen=false znaci da kljuc uopste nije u ovoj tabeli — trazi dalje u starijim tabelama.
+func (st *SSTable) MightContain(key []byte) bool {
+	if st == nil || st.bloomFilter == nil {
+		return true
+	}
+	return st.bloomFilter.MightContain(key)
+}
+
 func (st *SSTable) Search(key []byte) ([]byte, bool, error) {
-	// Korak 1: Bloom Filter test
 	if !st.bloomFilter.MightContain(key) {
 		return nil, false, nil
 	}
 
-	// Korak 2: Provjera Min-Max opsega
 	if bytes.Compare(key, st.MinKey) < 0 || bytes.Compare(key, st.MaxKey) > 0 {
 		return nil, false, nil
 	}
 
-	// Korak 3: Citanje Summary blok po blok -> opseg u Index fajlu (byte offseti)
 	startByteOffset, endByteOffset, err := st.searchSummaryBlocks(key)
 	if err != nil {
 		return nil, false, err
 	}
 
-	// Korak 4: Citanje Index fajla blok po blok u zadatom opsegu
 	dataOffset, found, err := st.searchIndexBlocks(startByteOffset, endByteOffset, key)
 	if err != nil {
 		return nil, false, err
@@ -313,22 +311,18 @@ func (st *SSTable) Search(key []byte) ([]byte, bool, error) {
 		return nil, false, nil
 	}
 
-	// Korak 5: Citanje iz Data fajla preko BlockManager-a (LRU kes)
 	entry, err := st.readEntryAt(dataOffset)
 	if err != nil {
 		return nil, false, err
 	}
 
 	if entry.Tombstone == 1 {
-		// Kljuc je pronadjen ali je obrisan — vracamo found=true, value=nil
-		// da signalizujemo: ne trazi dalje u starijim tabelama
 		return nil, true, nil
 	}
 
 	return entry.Value, true, nil
 }
 
-// readSummaryHeader cita samo header Summary fajla (MinKey i MaxKey) blok po blok.
 func (st *SSTable) readSummaryHeader() (*Summary, error) {
 	blockData, err := st.BlockManager.ReadBlock(st.SummaryPath, 0)
 	if err != nil {
@@ -336,7 +330,7 @@ func (st *SSTable) readSummaryHeader() (*Summary, error) {
 	}
 
 	if len(blockData) < SUMMARY_HEADER_SIZE {
-		return nil, fmt.Errorf("Summary blok prekratak za header")
+		return nil, errors.New("Summary blok prekratak za header")
 	}
 
 	return &Summary{
@@ -345,14 +339,11 @@ func (st *SSTable) readSummaryHeader() (*Summary, error) {
 	}, nil
 }
 
-// searchSummaryBlocks cita Summary fajl blok po blok i vraca [startByteOffset, endByteOffset)
-// opseg u Index fajlu u kome treba traziti dati kljuc.
 func (st *SSTable) searchSummaryBlocks(key []byte) (uint64, uint64, error) {
 	blockSize := uint64(st.BlockManager.GetBlockSize())
 	startByteOffset := uint64(0)
 	endByteOffset := uint64(st.indexFileSize)
 
-	// Preskacemo header (MinKey + MaxKey)
 	currentOffset := uint64(SUMMARY_HEADER_SIZE)
 	totalSize := uint64(st.summaryFileSize)
 
@@ -365,7 +356,6 @@ func (st *SSTable) searchSummaryBlocks(key []byte) (uint64, uint64, error) {
 			return 0, 0, fmt.Errorf("greska pri citanju Summary bloka %d: %w", blockNum, err)
 		}
 
-		// Prolazimo kroz entrie koji pocinju u ovom bloku
 		for offsetInBlock+SUMMARY_ENTRY_SIZE <= len(blockData) && currentOffset < totalSize {
 			entryData := blockData[offsetInBlock : offsetInBlock+SUMMARY_ENTRY_SIZE]
 
@@ -382,7 +372,6 @@ func (st *SSTable) searchSummaryBlocks(key []byte) (uint64, uint64, error) {
 			currentOffset += SUMMARY_ENTRY_SIZE
 		}
 
-		// Entry prelazi granicu bloka
 		if currentOffset < totalSize && offsetInBlock < len(blockData) {
 			remaining := blockData[offsetInBlock:]
 			nextBlock, err := st.BlockManager.ReadBlock(st.SummaryPath, blockNum+1)
@@ -413,8 +402,6 @@ func (st *SSTable) searchSummaryBlocks(key []byte) (uint64, uint64, error) {
 	return startByteOffset, endByteOffset, nil
 }
 
-// searchIndexBlocks cita Index fajl blok po blok kroz BlockManager i trazi dati kljuc
-// u opsegu [startByteOffset, endByteOffset). Vraca data offset i true ako je kljuc nadjen.
 func (st *SSTable) searchIndexBlocks(startByteOffset, endByteOffset uint64, key []byte) (uint64, bool, error) {
 	blockSize := uint64(st.BlockManager.GetBlockSize())
 	currentOffset := startByteOffset
@@ -428,7 +415,6 @@ func (st *SSTable) searchIndexBlocks(startByteOffset, endByteOffset uint64, key 
 			return 0, false, fmt.Errorf("greska pri citanju Index bloka %d: %w", blockNum, err)
 		}
 
-		// Prolazimo kroz sve entrie koji pocinju u ovom bloku
 		for offsetInBlock+INDEX_ENTRY_SIZE <= len(blockData) && currentOffset < endByteOffset {
 			entryData := blockData[offsetInBlock : offsetInBlock+INDEX_ENTRY_SIZE]
 
@@ -443,7 +429,6 @@ func (st *SSTable) searchIndexBlocks(startByteOffset, endByteOffset uint64, key 
 			currentOffset += INDEX_ENTRY_SIZE
 		}
 
-		// Ako entry prelazi granicu bloka, ucitajmo sledeci blok i procitamo entry
 		if currentOffset < endByteOffset && offsetInBlock < len(blockData) {
 			remaining := blockData[offsetInBlock:]
 			nextBlock, err := st.BlockManager.ReadBlock(st.IndexPath, blockNum+1)
@@ -472,8 +457,6 @@ func (st *SSTable) searchIndexBlocks(startByteOffset, endByteOffset uint64, key 
 	return 0, false, nil
 }
 
-// readEntryAt cita Entry iz data fajla koristeci BlockManager za kesiranje.
-// Ako zapis prelazi granicu bloka, automatski se ucitava i sledeci blok.
 func (st *SSTable) readEntryAt(offset uint64) (*Entry, error) {
 	blockSize := st.BlockManager.GetBlockSize()
 	blockNum := int(offset) / blockSize
@@ -522,7 +505,6 @@ func (st *SSTable) ValidateIntegrity() (bool, []int, error) {
 			break
 		}
 
-		// Koristi isti format koji je koristen pri pisanju
 		var serialized []byte
 		if st.CompressionLevel >= 2 {
 			serialized = entry.SerializeV2()

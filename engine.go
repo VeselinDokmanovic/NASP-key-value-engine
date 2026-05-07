@@ -10,12 +10,12 @@ import (
 	"strconv"
 	"strings"
 
-	wal "key-value-engine/app/Wal"
 	"key-value-engine/app/block"
 	"key-value-engine/app/cache"
 	"key-value-engine/app/memtable"
 	"key-value-engine/app/ratelimit"
 	"key-value-engine/app/sstable"
+	wal "key-value-engine/app/wal"
 )
 
 type engineConfig struct {

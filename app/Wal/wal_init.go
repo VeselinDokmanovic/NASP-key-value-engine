@@ -2,12 +2,12 @@ package wal
 
 import (
 	"fmt"
+	"key-value-engine/app/block"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"key-value-engine/app/block"
 )
 
 func WALInit(dir string, bm *block.BlockManager) (*WAL, error) {

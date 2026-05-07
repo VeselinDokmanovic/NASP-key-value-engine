@@ -179,7 +179,6 @@ func NewEngine() (*Engine, error) {
 		BloomFilter:      sstable.NewBloomFilter(bloomExpected, config.SSTable.Bloom.FalsePositiveRate),
 	}
 
-	// insert WAL entries into memtables
 	if err := walEngine.InsertIntoMemtable(e.MemtablePool); err != nil {
 		if strings.Contains(err.Error(), "flush required") {
 			if ferr := e.flushMemtablesToSSTable(); ferr != nil {
@@ -217,11 +216,10 @@ func loadExistingSSTables(dir string, blockManager *block.BlockManager) ([]*ssta
 		}
 
 		st := sstable.NewSSTable(sstable.SSTableConfig{
-			ID:               id,
-			Dir:              dir,
-			BlockManager:     blockManager,
-			CompressionLevel: 0,
-			SummaryStep:      0,
+			ID:           id,
+			Dir:          dir,
+			BlockManager: blockManager,
+			SummaryStep:  0,
 		})
 		if err := st.Read(); err != nil {
 			return nil, fmt.Errorf("load sstable %d: %w", id, err)
@@ -322,15 +320,12 @@ func (e *Engine) Put(key []byte, value []byte) error {
 		return fmt.Errorf("wal append failed: %w", err)
 	}
 
-	// update memtable
 	if err := e.MemtablePool.Put(key, value); err != nil {
-		// if all memtables full -> flush required
 		if strings.Contains(err.Error(), "flush required") {
 			if ferr := e.flushMemtablesToSSTable(); ferr != nil {
 				return fmt.Errorf("flush failed: %w", ferr)
 			}
 
-			// after flush, retry put
 			if err2 := e.MemtablePool.Put(key, value); err2 != nil {
 				return fmt.Errorf("memtable put failed after flush: %w", err2)
 			}
@@ -358,7 +353,6 @@ func (e *Engine) flushMemtablesToSSTable() error {
 		return nil
 	}
 
-	// determine next SSTable ID
 	dir := "./data/sstables"
 	if e.SSTable != nil && e.SSTable.Dir != "" {
 		dir = e.SSTable.Dir
@@ -383,14 +377,12 @@ func (e *Engine) flushMemtablesToSSTable() error {
 	nextID := maxID + 1
 
 	newSt := sstable.NewSSTable(sstable.SSTableConfig{
-		ID:               nextID,
-		Dir:              dir,
-		BlockManager:     e.BlockManager,
-		CompressionLevel: 0,
-		SummaryStep:      0,
+		ID:           nextID,
+		Dir:          dir,
+		BlockManager: e.BlockManager,
+		SummaryStep:  0,
 	})
 
-	// convert memtable to sstable
 	sstEntries := make([]*sstable.Entry, 0, len(entries))
 	var flushTs int64 = 0
 	for _, me := range entries {
@@ -410,25 +402,19 @@ func (e *Engine) flushMemtablesToSSTable() error {
 		return fmt.Errorf("sstable write failed: %w", err)
 	}
 
-	// load bloom filter and summary metadata
 	if err := newSt.Read(); err != nil {
-		// not fatal — try to continue
 		return fmt.Errorf("sstable read metadata failed: %w", err)
 	}
 
-	// load bloom filter from file and set engine bloom
 	if bf, err := sstable.LoadBloomFilter(newSt.FilterPath); err == nil {
 		e.BloomFilter = bf
 	}
 
-	// set engine to point to latest sstable
 	e.SSTable = newSt
 	e.SSTables = append(e.SSTables, newSt)
 
-	// clear memtables
 	e.MemtablePool.Clear()
 
-	// ensure WAL persisted, then delete old segments
 	if e.WAL != nil {
 		if err := e.WAL.Flush(); err != nil {
 			return fmt.Errorf("wal flush failed: %w", err)
@@ -454,15 +440,12 @@ func (e *Engine) Delete(key []byte) error {
 		return fmt.Errorf("wal delete failed: %w", err)
 	}
 
-	// update memtable with tombstone
 	if err := e.MemtablePool.Delete(key); err != nil {
-		// if all memtables full -> flush required
 		if strings.Contains(err.Error(), "flush required") {
 			if ferr := e.flushMemtablesToSSTable(); ferr != nil {
 				return fmt.Errorf("flush failed: %w", ferr)
 			}
 
-			// after flush, retry delete
 			if err2 := e.MemtablePool.Delete(key); err2 != nil {
 				return fmt.Errorf("memtable delete failed after flush: %w", err2)
 			}
@@ -485,23 +468,19 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 		return nil, errors.New("key cannot be empty")
 	}
 
-	// 1. check memtable
 	entry, found := e.MemtablePool.Get(key)
 	if found && entry != nil {
-		// check tombstone
 		if entry.Tombstone == 0 {
 			return entry.Value, nil
 		}
 		return nil, errors.New("key not found")
 	}
 
-	// 2. check cache
 	keyStr := string(key)
 	if cachedValue, found := e.LRUCache.Get(keyStr); found {
 		return cachedValue, nil
 	}
 
-	// 3. check all SSTables from newest to oldest using each table's Bloom filter first
 	for i := len(e.SSTables) - 1; i >= 0; i-- {
 		table := e.SSTables[i]
 		if table == nil || !table.MightContain(key) {

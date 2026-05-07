@@ -128,9 +128,6 @@ func (b *BTreeMemtable) search(node *BTreeNode, key []byte) (*Entry, bool) {
 	}
 
 	if i < len(node.Keys) && bytes.Equal(key, node.Keys[i].Key) {
-		if node.Keys[i].Tombstone != 0 {
-			return node.Keys[i], false
-		}
 		return node.Keys[i], true
 	}
 

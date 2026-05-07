@@ -10,7 +10,6 @@ type HashMapMemtable struct {
 	size       int
 	memoryUsed int64
 	cfg        MemtableConfig
-	// Mutex?
 }
 
 func NewHashMapMemtable(cfg MemtableConfig) *HashMapMemtable {
@@ -42,11 +41,10 @@ func (h *HashMapMemtable) Put(key []byte, entry *Entry) bool {
 
 func (h *HashMapMemtable) Get(key []byte) (*Entry, bool) {
 	entry := h.data[string(key)]
-	if entry == nil || entry.Tombstone != 0 {
-		return entry, false
-	} else {
-		return entry, true
+	if entry == nil {
+		return nil, false
 	}
+	return entry, true
 }
 
 func (h *HashMapMemtable) Delete(key []byte) bool {

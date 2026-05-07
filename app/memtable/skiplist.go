@@ -108,9 +108,6 @@ func (s *SkipListMemtable) Get(key []byte) (*Entry, bool) {
 	current = current.forward[0]
 
 	if current != nil && bytes.Equal(current.entry.Key, key) {
-		if current.entry.Tombstone != 0 {
-			return current.entry, false
-		}
 		return current.entry, true
 	}
 

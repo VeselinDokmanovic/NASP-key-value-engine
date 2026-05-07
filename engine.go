@@ -341,6 +341,7 @@ func (e *Engine) Put(key []byte, value []byte) error {
 		return fmt.Errorf("memtable put failed: %w", err)
 	}
 
+	e.LRUCache.Put(string(key), value)
 	return nil
 }
 
@@ -472,6 +473,7 @@ func (e *Engine) Delete(key []byte) error {
 		return fmt.Errorf("memtable delete failed: %w", err)
 	}
 
+	e.LRUCache.Delete(string(key))
 	return nil
 }
 

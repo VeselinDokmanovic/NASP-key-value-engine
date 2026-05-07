@@ -163,7 +163,7 @@ func NewEngine() (*Engine, error) {
 		bloomExpected = config.Memtable.HashMap.MaxEntries
 	}
 
-	return &Engine{
+	e := &Engine{
 		WAL:              walEngine,
 		HashMap:          hashMap,
 		SkipList:         skipList,
@@ -177,7 +177,23 @@ func NewEngine() (*Engine, error) {
 		SSTable:          latestSSTable,
 		SSTables:         sstables,
 		BloomFilter:      sstable.NewBloomFilter(bloomExpected, config.SSTable.Bloom.FalsePositiveRate),
-	}, nil
+	}
+
+	// insert WAL entries into memtables
+	if err := walEngine.InsertIntoMemtable(e.MemtablePool); err != nil {
+		if strings.Contains(err.Error(), "flush required") {
+			if ferr := e.flushMemtablesToSSTable(); ferr != nil {
+				return nil, fmt.Errorf("flush during wal replay failed: %w", ferr)
+			}
+			if rerr := walEngine.InsertIntoMemtable(e.MemtablePool); rerr != nil {
+				return nil, fmt.Errorf("wal replay failed after flush: %w", rerr)
+			}
+		} else {
+			return nil, fmt.Errorf("wal replay failed: %w", err)
+		}
+	}
+
+	return e, nil
 }
 
 func loadExistingSSTables(dir string, blockManager *block.BlockManager) ([]*sstable.SSTable, error) {
@@ -375,6 +391,7 @@ func (e *Engine) flushMemtablesToSSTable() error {
 
 	// convert memtable to sstable
 	sstEntries := make([]*sstable.Entry, 0, len(entries))
+	var flushTs int64 = 0
 	for _, me := range entries {
 		sstEntries = append(sstEntries, &sstable.Entry{
 			Timestamp: me.Timestamp,
@@ -383,6 +400,9 @@ func (e *Engine) flushMemtablesToSSTable() error {
 			Key:       me.Key,
 			Value:     me.Value,
 		})
+		if me.Timestamp > flushTs {
+			flushTs = me.Timestamp
+		}
 	}
 
 	if err := newSt.Write(sstEntries); err != nil {
@@ -407,6 +427,16 @@ func (e *Engine) flushMemtablesToSSTable() error {
 	// clear memtables
 	e.MemtablePool.Clear()
 
+	// ensure WAL persisted, then delete old segments
+	if e.WAL != nil {
+		if err := e.WAL.Flush(); err != nil {
+			return fmt.Errorf("wal flush failed: %w", err)
+		}
+		if err := e.WAL.DeleteSegmentsBeforeTimestamp(flushTs); err != nil {
+			fmt.Printf("wal delete failed: %v\n", err)
+		}
+	}
+
 	return nil
 }
 
@@ -425,6 +455,20 @@ func (e *Engine) Delete(key []byte) error {
 
 	// update memtable with tombstone
 	if err := e.MemtablePool.Delete(key); err != nil {
+		// if all memtables full -> flush required
+		if strings.Contains(err.Error(), "flush required") {
+			if ferr := e.flushMemtablesToSSTable(); ferr != nil {
+				return fmt.Errorf("flush failed: %w", ferr)
+			}
+
+			// after flush, retry delete
+			if err2 := e.MemtablePool.Delete(key); err2 != nil {
+				return fmt.Errorf("memtable delete failed after flush: %w", err2)
+			}
+
+			return nil
+		}
+
 		return fmt.Errorf("memtable delete failed: %w", err)
 	}
 
@@ -442,7 +486,11 @@ func (e *Engine) Get(key []byte) ([]byte, error) {
 	// 1. check memtable
 	entry, found := e.MemtablePool.Get(key)
 	if found && entry != nil {
-		return entry.Value, nil
+		// check tombstone
+		if entry.Tombstone == 0 {
+			return entry.Value, nil
+		}
+		return nil, errors.New("key not found")
 	}
 
 	// 2. check cache

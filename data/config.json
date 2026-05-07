@@ -54,13 +54,13 @@
       "delete": 1
     },
     "hashmap": {
-      "max_entries": 1000,
+      "max_entries": 3,
       "max_memory_kb": 1024,
       "btree_order": 3
     },
     "pool": {
       "type": "hashmap",
-      "size": 3
+      "size": 1
     },
     "skiplist": {
       "max_level": 16,

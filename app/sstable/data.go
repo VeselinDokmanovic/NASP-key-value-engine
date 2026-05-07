@@ -41,8 +41,7 @@ func (e *Entry) Serialize() []byte {
 }
 
 func DeserializeEntry(r io.Reader) (*Entry, error) {
-	// Format: CRC(4) | Timestamp(8) | Tombstone(1) | KeySize(8) | ValueSize(8) | Type(1) | Key | Value
-	// CRC se racuna nad svim bajtovima koji dolaze NAKON CRC polja (payload).
+
 	header := make([]byte, 4+8+1+8+8+1)
 
 	_, err := io.ReadFull(r, header)
@@ -74,7 +73,6 @@ func DeserializeEntry(r io.Reader) (*Entry, error) {
 		return nil, err
 	}
 
-	// Validacija CRC-a: payload = sve nakon CRC polja
 	payload := make([]byte, 0, len(header)-4+int(keySize)+int(valueSize))
 	payload = append(payload, header[4:]...)
 	payload = append(payload, e.Key...)

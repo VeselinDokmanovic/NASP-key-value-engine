@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
 
 	wal "key-value-engine/app/Wal"
 	"key-value-engine/app/block"
@@ -72,8 +75,8 @@ type Engine struct {
 	TokenBucket      *ratelimit.TokenBucket
 	RateLimitedStore *ratelimit.RateLimitedStore
 	SSTable          *sstable.SSTable
+	SSTables         []*sstable.SSTable
 	BloomFilter      *sstable.BloomFilter
-	sstableLoaded    bool
 }
 
 func NewEngine() (*Engine, error) {
@@ -140,13 +143,15 @@ func NewEngine() (*Engine, error) {
 		return nil, err
 	}
 
-	sst := sstable.NewSSTable(sstable.SSTableConfig{
-		ID:               1,
-		Dir:              sstableDir,
-		BlockManager:     blockManager,
-		CompressionLevel: 0,
-		SummaryStep:      config.SSTable.Summary.Step,
-	})
+	sstables, err := loadExistingSSTables(sstableDir, blockManager)
+	if err != nil {
+		return nil, err
+	}
+
+	var latestSSTable *sstable.SSTable
+	if len(sstables) > 0 {
+		latestSSTable = sstables[len(sstables)-1]
+	}
 
 	lruSize := config.BlockManager.DefaultConfig.CacheSize
 	if lruSize <= 0 {
@@ -169,9 +174,54 @@ func NewEngine() (*Engine, error) {
 		MemStore:         memStore,
 		TokenBucket:      tokenBucket,
 		RateLimitedStore: ratelimit.NewRateLimitedStore(memStore, tokenBucket),
-		SSTable:          sst,
+		SSTable:          latestSSTable,
+		SSTables:         sstables,
 		BloomFilter:      sstable.NewBloomFilter(bloomExpected, config.SSTable.Bloom.FalsePositiveRate),
 	}, nil
+}
+
+func loadExistingSSTables(dir string, blockManager *block.BlockManager) ([]*sstable.SSTable, error) {
+	matches, err := filepath.Glob(filepath.Join(dir, "table-*.data"))
+	if err != nil {
+		return nil, fmt.Errorf("scan sstables: %w", err)
+	}
+
+	type tableInfo struct {
+		id int64
+		st *sstable.SSTable
+	}
+
+	tables := make([]tableInfo, 0, len(matches))
+	for _, match := range matches {
+		base := filepath.Base(match)
+		num := strings.TrimSuffix(strings.TrimPrefix(base, "table-"), ".data")
+		id, err := strconv.ParseInt(num, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		st := sstable.NewSSTable(sstable.SSTableConfig{
+			ID:               id,
+			Dir:              dir,
+			BlockManager:     blockManager,
+			CompressionLevel: 0,
+			SummaryStep:      0,
+		})
+		if err := st.Read(); err != nil {
+			return nil, fmt.Errorf("load sstable %d: %w", id, err)
+		}
+
+		tables = append(tables, tableInfo{id: id, st: st})
+	}
+
+	sort.Slice(tables, func(i, j int) bool { return tables[i].id < tables[j].id })
+
+	result := make([]*sstable.SSTable, 0, len(tables))
+	for _, table := range tables {
+		result = append(result, table.st)
+	}
+
+	return result, nil
 }
 
 func loadEngineConfig(path string) (*engineConfig, error) {
@@ -243,77 +293,198 @@ func loadEngineConfig(path string) (*engineConfig, error) {
 	return &config, nil
 }
 
-func (e *Engine) ensureSSTableLoaded() error {
-	if e == nil || e.SSTable == nil || e.sstableLoaded {
-		return nil
+func (e *Engine) Put(key []byte, value []byte) error {
+	if e == nil {
+		return errors.New("engine is nil")
+	}
+	if len(key) == 0 {
+		return errors.New("key cannot be empty")
 	}
 
-	if err := e.SSTable.Read(); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
+	_, err := e.WAL.Append(string(key), string(value), false)
+	if err != nil {
+		return fmt.Errorf("wal append failed: %w", err)
+	}
+
+	// update memtable
+	if err := e.MemtablePool.Put(key, value); err != nil {
+		// if all memtables full -> flush required
+		if strings.Contains(err.Error(), "flush required") {
+			if ferr := e.flushMemtablesToSSTable(); ferr != nil {
+				return fmt.Errorf("flush failed: %w", ferr)
+			}
+
+			// after flush, retry put
+			if err2 := e.MemtablePool.Put(key, value); err2 != nil {
+				return fmt.Errorf("memtable put failed after flush: %w", err2)
+			}
+
 			return nil
 		}
-		return err
+
+		return fmt.Errorf("memtable put failed: %w", err)
 	}
 
-	e.sstableLoaded = true
 	return nil
 }
 
-func (e *Engine) Get(key []byte) ([]byte, bool, error) {
+func (e *Engine) flushMemtablesToSSTable() error {
 	if e == nil {
-		return nil, false, errors.New("engine is nil")
+		return errors.New("engine is nil")
+	}
+	if e.MemtablePool == nil {
+		return errors.New("memtable pool is nil")
 	}
 
-	if e.MemtablePool != nil {
-		if entry, found := e.MemtablePool.Get(key); found {
-			if e.LRUCache != nil && entry != nil && entry.Value != nil {
-				e.LRUCache.Put(string(key), append([]byte(nil), entry.Value...))
+	entries := e.MemtablePool.GetAllForFlush()
+	if len(entries) == 0 {
+		return nil
+	}
+
+	// determine next SSTable ID
+	dir := "./data/sstables"
+	if e.SSTable != nil && e.SSTable.Dir != "" {
+		dir = e.SSTable.Dir
+	}
+
+	pattern := filepath.Join(dir, "table-*.data")
+	matches, _ := filepath.Glob(pattern)
+
+	maxID := int64(0)
+	for _, m := range matches {
+		base := filepath.Base(m)
+		if strings.HasPrefix(base, "table-") && strings.HasSuffix(base, ".data") {
+			num := strings.TrimSuffix(strings.TrimPrefix(base, "table-"), ".data")
+			if id, err := strconv.ParseInt(num, 10, 64); err == nil {
+				if id > maxID {
+					maxID = id
+				}
 			}
-			return entry.Value, true, nil
 		}
 	}
 
-	if e.LRUCache != nil {
-		if value, found := e.LRUCache.Get(string(key)); found {
-			return value, true, nil
-		}
+	nextID := maxID + 1
+
+	newSt := sstable.NewSSTable(sstable.SSTableConfig{
+		ID:               nextID,
+		Dir:              dir,
+		BlockManager:     e.BlockManager,
+		CompressionLevel: 0,
+		SummaryStep:      0,
+	})
+
+	// convert memtable to sstable
+	sstEntries := make([]*sstable.Entry, 0, len(entries))
+	for _, me := range entries {
+		sstEntries = append(sstEntries, &sstable.Entry{
+			Timestamp: me.Timestamp,
+			Tombstone: me.Tombstone,
+			Type:      me.Type,
+			Key:       me.Key,
+			Value:     me.Value,
+		})
 	}
 
-	if e.SSTable == nil {
-		return nil, false, nil
+	if err := newSt.Write(sstEntries); err != nil {
+		return fmt.Errorf("sstable write failed: %w", err)
 	}
 
-	if err := e.ensureSSTableLoaded(); err != nil {
-		return nil, false, err
-	}
-	if !e.sstableLoaded {
-		return nil, false, nil
+	// load bloom filter and summary metadata
+	if err := newSt.Read(); err != nil {
+		// not fatal — try to continue
+		return fmt.Errorf("sstable read metadata failed: %w", err)
 	}
 
-	value, found, err := e.SSTable.Search(key)
+	// load bloom filter from file and set engine bloom
+	if bf, err := sstable.LoadBloomFilter(newSt.FilterPath); err == nil {
+		e.BloomFilter = bf
+	}
+
+	// set engine to point to latest sstable
+	e.SSTable = newSt
+	e.SSTables = append(e.SSTables, newSt)
+
+	// clear memtables
+	e.MemtablePool.Clear()
+
+	return nil
+}
+
+func (e *Engine) Delete(key []byte) error {
+	if e == nil {
+		return errors.New("engine is nil")
+	}
+	if len(key) == 0 {
+		return errors.New("key cannot be empty")
+	}
+
+	_, err := e.WAL.Append(string(key), "", true)
 	if err != nil {
-		return nil, false, err
+		return fmt.Errorf("wal delete failed: %w", err)
 	}
-	if !found {
-		return nil, false, nil
+
+	// update memtable with tombstone
+	if err := e.MemtablePool.Delete(key); err != nil {
+		return fmt.Errorf("memtable delete failed: %w", err)
 	}
-	if value == nil {
-		if e.LRUCache != nil {
-			e.LRUCache.Delete(string(key))
+
+	return nil
+}
+
+func (e *Engine) Get(key []byte) ([]byte, error) {
+	if e == nil {
+		return nil, errors.New("engine is nil")
+	}
+	if len(key) == 0 {
+		return nil, errors.New("key cannot be empty")
+	}
+
+	// 1. check memtable
+	entry, found := e.MemtablePool.Get(key)
+	if found && entry != nil {
+		return entry.Value, nil
+	}
+
+	// 2. check cache
+	keyStr := string(key)
+	if cachedValue, found := e.LRUCache.Get(keyStr); found {
+		return cachedValue, nil
+	}
+
+	// 3. check all SSTables from newest to oldest using each table's Bloom filter first
+	for i := len(e.SSTables) - 1; i >= 0; i-- {
+		table := e.SSTables[i]
+		if table == nil || !table.MightContain(key) {
+			continue
 		}
-		return nil, false, nil
+
+		value, found, err := table.Search(key)
+		if err != nil {
+			continue
+		}
+		if found {
+			if value != nil {
+				e.LRUCache.Put(keyStr, value)
+				return value, nil
+			}
+			return nil, errors.New("key not found")
+		}
 	}
 
-	if e.LRUCache != nil {
-		e.LRUCache.Put(string(key), append([]byte(nil), value...))
-	}
-
-	return value, true, nil
+	return nil, errors.New("key not found")
 }
 
 func (e *Engine) Close() {
 	if e == nil {
 		return
+	}
+	if err := e.flushMemtablesToSSTable(); err != nil {
+		fmt.Printf("flush on close failed: %v\n", err)
+	}
+	if e.WAL != nil {
+		if err := e.WAL.Flush(); err != nil {
+			fmt.Printf("wal flush on close failed: %v\n", err)
+		}
 	}
 	if e.TokenBucket != nil {
 		e.TokenBucket.Stop()

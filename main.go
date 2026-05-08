@@ -38,7 +38,7 @@ func main() {
 			valRaw, _ := reader.ReadString('\n')
 			val := strings.TrimSpace(valRaw)
 
-			if err := engine.Put([]byte(key), []byte(val)); err != nil {
+			if err := engine.RateLimitedStore.Put(key, []byte(val)); err != nil {
 				fmt.Printf("PUT error: %v\n", err)
 			} else {
 				fmt.Println("OK")
@@ -49,9 +49,11 @@ func main() {
 			keyRaw, _ := reader.ReadString('\n')
 			key := strings.TrimSpace(keyRaw)
 
-			v, err := engine.Get([]byte(key))
+			v, ok, err := engine.RateLimitedStore.Get(key)
 			if err != nil {
 				fmt.Printf("GET error: %v\n", err)
+			} else if !ok {
+				fmt.Println("GET error: key not found")
 			} else {
 				fmt.Printf("Value: %s\n", string(v))
 			}
@@ -61,7 +63,7 @@ func main() {
 			keyRaw, _ := reader.ReadString('\n')
 			key := strings.TrimSpace(keyRaw)
 
-			if err := engine.Delete([]byte(key)); err != nil {
+			if err := engine.RateLimitedStore.Delete(key); err != nil {
 				fmt.Printf("DELETE error: %v\n", err)
 			} else {
 				fmt.Println("OK")

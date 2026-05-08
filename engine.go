@@ -164,20 +164,21 @@ func NewEngine() (*Engine, error) {
 	}
 
 	e := &Engine{
-		WAL:              walEngine,
-		HashMap:          hashMap,
-		SkipList:         skipList,
-		BTree:            btree,
-		MemtablePool:     memtablePool,
-		BlockManager:     blockManager,
-		LRUCache:         cache.NewLRU(lruSize),
-		MemStore:         memStore,
-		TokenBucket:      tokenBucket,
-		RateLimitedStore: ratelimit.NewRateLimitedStore(memStore, tokenBucket),
-		SSTable:          latestSSTable,
-		SSTables:         sstables,
-		BloomFilter:      sstable.NewBloomFilter(bloomExpected, config.SSTable.Bloom.FalsePositiveRate),
+		WAL:          walEngine,
+		HashMap:      hashMap,
+		SkipList:     skipList,
+		BTree:        btree,
+		MemtablePool: memtablePool,
+		BlockManager: blockManager,
+		LRUCache:     cache.NewLRU(lruSize),
+		MemStore:     memStore,
+		TokenBucket:  tokenBucket,
+		SSTable:      latestSSTable,
+		SSTables:     sstables,
+		BloomFilter:  sstable.NewBloomFilter(bloomExpected, config.SSTable.Bloom.FalsePositiveRate),
 	}
+
+	e.RateLimitedStore = ratelimit.NewRateLimitedStore(e, tokenBucket)
 
 	if err := walEngine.InsertIntoMemtable(e.MemtablePool); err != nil {
 		if strings.Contains(err.Error(), "flush required") {
